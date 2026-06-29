@@ -17,6 +17,12 @@ EXPLICIT_LIANGYU_RE = re.compile(
 LEADING_LABEL_RE = re.compile(
     r"^(?:推断|译文|翻译|良语翻译|良语推断|答案|还原)\s*[:：]\s*"
 )
+TRANSLATION_REQUEST_RE = re.compile(
+    r"(翻译|译一下|解释|说明|什么意思|是什么意思|啥意思|什么含义|含义|还原|展开|转成中文|完整意思)"
+)
+NEGATED_TRANSLATION_REQUEST_RE = re.compile(
+    r"(?:不|别|无需|不用|不必).{0,4}(?:翻译|解释|说明|展开)"
+)
 
 
 @dataclass(frozen=True)
@@ -55,6 +61,13 @@ def extract_liangyu_candidates(
         if len(candidates) >= max_candidates:
             break
     return candidates
+
+
+def is_explicit_translation_request(message: str) -> bool:
+    message = message or ""
+    if NEGATED_TRANSLATION_REQUEST_RE.search(message):
+        return False
+    return bool(TRANSLATION_REQUEST_RE.search(message))
 
 
 def build_inference_prompt(
@@ -143,6 +156,23 @@ def clean_inferred_text(abbr: str, response: str, *, max_chars: int = 120) -> st
         if first_line.startswith(label):
             first_line = first_line[len(label) :].lstrip("：: -—").strip()
     return first_line[:max_chars].strip()
+
+
+def format_understanding_context(
+    matches: Sequence[LiangYuMatch],
+    *,
+    title: str = "良语理解提示",
+    unknown_candidates: Sequence[str] | None = None,
+) -> str:
+    lines = [
+        f"[{title}]",
+        "以下是插件为模型理解原消息自动添加的上下文。除非用户明确要求翻译，否则不要专门输出翻译说明。",
+    ]
+    for match in matches:
+        lines.append(f"- {match.abbr}：{match.text}")
+    for candidate in unknown_candidates or []:
+        lines.append(f"- {candidate}：可能是良语缩写，请结合人格设定和知识库理解。")
+    return "\n".join(lines)
 
 
 class LiangYuDictionary:

@@ -1,8 +1,8 @@
 {
   "enabled": {
-    "description": "是否启用群消息良语自动翻译。",
+    "description": "是否启用群消息良语理解与翻译。",
     "type": "bool",
-    "hint": "关闭后仍保留插件文件，但不会自动回复群消息。",
+    "hint": "关闭后仍保留插件文件，但不会处理群消息中的良语。",
     "default": true
   },
   "max_matches_per_message": {
@@ -48,10 +48,22 @@
     "hint": "开启后插件不再局限于已有词库，但结果会受模型能力影响。",
     "default": true
   },
-  "auto_infer_unknown_dotted": {
-    "description": "群消息中出现未知的带分隔符良语时是否自动推断。",
+  "auto_reply_on_explicit_request": {
+    "description": "用户明确要求翻译时是否主动回复翻译结果。",
     "type": "bool",
-    "hint": "关闭后仍可使用 /良语 缩写 手动推断。",
+    "hint": "例如消息包含“翻译”“什么意思”“解释”等词，或使用 /良语 命令。",
+    "default": true
+  },
+  "silent_understand_normal_messages": {
+    "description": "普通对话中出现良语时是否静默追加理解上下文给主模型。",
+    "type": "bool",
+    "hint": "开启后 bot 会理解输入含义，但不会专门输出翻译。",
+    "default": true
+  },
+  "silent_infer_unknown": {
+    "description": "普通对话中出现未知带分隔符良语时是否静默调用 LLM 推断。",
+    "type": "bool",
+    "hint": "会增加一次模型调用，但能让主模型更准确理解剧情相关缩写。",
     "default": true
   },
   "use_persona_context": {
@@ -67,7 +79,7 @@
     "default": true
   },
   "max_llm_candidates_per_message": {
-    "description": "单条群消息最多自动推断多少个未知良语。",
+    "description": "单条群消息最多推断多少个未知良语。",
     "type": "int",
     "hint": "用于控制模型调用次数和群内刷屏。",
     "default": 2

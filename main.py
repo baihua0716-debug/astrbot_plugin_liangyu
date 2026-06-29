@@ -14,6 +14,9 @@ try:
         clean_inferred_text,
         extract_liangyu_candidates,
         format_matches,
+        format_understanding_context,
+        is_explicit_translation_request,
+        normalize_key,
     )
 except ImportError:
     from liangyu import (
@@ -25,6 +28,9 @@ except ImportError:
         clean_inferred_text,
         extract_liangyu_candidates,
         format_matches,
+        format_understanding_context,
+        is_explicit_translation_request,
+        normalize_key,
     )
 
 
@@ -38,7 +44,9 @@ DEFAULT_CONFIG = {
     "item_format": "{abbr}：{text}",
     "inferred_item_format": "{abbr}：{text}",
     "enable_llm_fallback": True,
-    "auto_infer_unknown_dotted": True,
+    "auto_reply_on_explicit_request": True,
+    "silent_understand_normal_messages": True,
+    "silent_infer_unknown": True,
     "use_persona_context": True,
     "use_knowledge_base": True,
     "max_llm_candidates_per_message": 2,
@@ -66,7 +74,7 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
         return int(DEFAULT_CONFIG[key])
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.3.0")
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.0")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -78,7 +86,7 @@ class LiangYuTranslatorPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def translate_group_message(self, event: AstrMessageEvent):
-        """自动翻译群消息中出现的良语缩写。"""
+        """理解群消息中出现的良语缩写，并在明确请求时翻译。"""
         if not config_value(self.config, "enabled"):
             return
 
@@ -97,47 +105,59 @@ class LiangYuTranslatorPlugin(Star):
                 1, int_config_value(self.config, "min_unseparated_match_len")
             ),
         )
-        if not matches:
-            if not (
-                config_value(self.config, "enable_llm_fallback")
-                and config_value(self.config, "auto_infer_unknown_dotted")
-            ):
-                return
-            candidates = extract_liangyu_candidates(
-                message,
-                max_candidates=max(
-                    1, int_config_value(self.config, "max_llm_candidates_per_message")
-                ),
-            )
-            if not candidates:
-                return
-            matches = await self._infer_matches(event, candidates, message)
-            if not matches:
-                return
 
-        if config_value(self.config, "stop_event_after_reply"):
-            event.stop_event()
-        yield event.plain_result(
-            format_matches(
-                matches,
-                title=str(
-                    config_value(
-                        self.config,
-                        "inferred_reply_title"
-                        if any(match.inferred for match in matches)
-                        else "reply_title",
-                    )
-                ),
-                item_format=str(
-                    config_value(
-                        self.config,
-                        "inferred_item_format"
-                        if any(match.inferred for match in matches)
-                        else "item_format",
-                    )
-                ),
-            )
+        candidates = extract_liangyu_candidates(
+            message,
+            max_candidates=max(
+                1, int_config_value(self.config, "max_llm_candidates_per_message")
+            ),
         )
+        unknown_candidates = self._filter_unknown_candidates(candidates, matches)
+        explicit_request = is_explicit_translation_request(message)
+
+        if explicit_request and config_value(self.config, "auto_reply_on_explicit_request"):
+            reply_matches = list(matches)
+            if unknown_candidates and config_value(self.config, "enable_llm_fallback"):
+                reply_matches.extend(
+                    await self._infer_matches(event, unknown_candidates, message)
+                )
+            if not reply_matches:
+                return
+            if config_value(self.config, "stop_event_after_reply"):
+                event.stop_event()
+            yield event.plain_result(self._format_reply(reply_matches))
+            return
+
+        if not config_value(self.config, "silent_understand_normal_messages"):
+            return
+        if not self._will_request_llm(event):
+            return
+
+        context_matches = list(matches)
+        unresolved_candidates: list[str] = []
+        if (
+            unknown_candidates
+            and config_value(self.config, "enable_llm_fallback")
+            and config_value(self.config, "silent_infer_unknown")
+        ):
+            context_matches.extend(
+                await self._infer_matches(event, unknown_candidates, message)
+            )
+            resolved_keys = {normalize_key(match.abbr) for match in context_matches}
+            unresolved_candidates = [
+                candidate
+                for candidate in unknown_candidates
+                if normalize_key(candidate) not in resolved_keys
+            ]
+        else:
+            unresolved_candidates = unknown_candidates
+
+        if context_matches or unresolved_candidates:
+            self._append_understanding_context(
+                event,
+                context_matches,
+                unresolved_candidates,
+            )
 
     @filter.command("良语")
     async def query_liangyu(self, event: AstrMessageEvent):
@@ -175,6 +195,72 @@ class LiangYuTranslatorPlugin(Star):
             return
 
         yield event.plain_result("未找到这个良语缩写，也暂时无法调用模型推断。")
+
+    def _format_reply(self, matches: list[LiangYuMatch]) -> str:
+        return format_matches(
+            matches,
+            title=str(
+                config_value(
+                    self.config,
+                    "inferred_reply_title"
+                    if any(match.inferred for match in matches)
+                    else "reply_title",
+                )
+            ),
+            item_format=str(
+                config_value(
+                    self.config,
+                    "inferred_item_format"
+                    if any(match.inferred for match in matches)
+                    else "item_format",
+                )
+            ),
+        )
+
+    def _filter_unknown_candidates(
+        self,
+        candidates: list[str],
+        matches: list[LiangYuMatch],
+    ) -> list[str]:
+        known_keys = {normalize_key(match.abbr) for match in matches}
+        unknown: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = normalize_key(candidate)
+            if not key or key in known_keys or key in seen:
+                continue
+            entry = self.dictionary.lookup(candidate)
+            if entry:
+                known_keys.add(entry.key)
+                continue
+            unknown.append(candidate)
+            seen.add(key)
+        return unknown
+
+    @staticmethod
+    def _will_request_llm(event: AstrMessageEvent) -> bool:
+        if event.get_extra("provider_request") is not None:
+            return True
+        return bool(
+            getattr(event, "is_at_or_wake_command", False)
+            and not getattr(event, "call_llm", False)
+        )
+
+    @staticmethod
+    def _append_understanding_context(
+        event: AstrMessageEvent,
+        matches: list[LiangYuMatch],
+        unknown_candidates: list[str],
+    ) -> None:
+        addition = format_understanding_context(
+            matches,
+            unknown_candidates=unknown_candidates,
+        )
+        if not addition:
+            return
+        event.message_str = f"{event.message_str}\n\n{addition}"
+        if getattr(event, "message_obj", None) is not None:
+            event.message_obj.message_str = event.message_str
 
     async def _infer_matches(
         self,

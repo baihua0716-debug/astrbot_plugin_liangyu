@@ -8,6 +8,8 @@ from liangyu import (
     build_knowledge_query,
     extract_liangyu_candidates,
     format_matches,
+    format_understanding_context,
+    is_explicit_translation_request,
 )
 
 
@@ -40,6 +42,13 @@ class LiangYuDictionaryTest(unittest.TestCase):
     def test_extracts_unknown_dotted_candidates(self):
         self.assertEqual(extract_liangyu_candidates("某群友说“你·我·母”"), ["你·我·母"])
 
+    def test_detects_explicit_translation_request(self):
+        self.assertTrue(is_explicit_translation_request("帮我翻译 你·我·母"))
+        self.assertTrue(is_explicit_translation_request("你·我·母 是什么意思"))
+
+    def test_ignores_negated_translation_request(self):
+        self.assertFalse(is_explicit_translation_request("不用翻译，你·我·母只是口癖"))
+
     def test_builds_prompt_with_examples(self):
         prompt = build_inference_prompt("你·我·母", self.dictionary.entries)
 
@@ -69,6 +78,13 @@ class LiangYuDictionaryTest(unittest.TestCase):
         text = clean_inferred_text("你·我·母", "译文：你是我的母亲\n解释：略")
 
         self.assertEqual(text, "你是我的母亲")
+
+    def test_formats_silent_understanding_context(self):
+        matches = self.dictionary.find_matches("你·我·母")
+        context = format_understanding_context(matches)
+
+        self.assertIn("不要专门输出翻译说明", context)
+        self.assertIn("你·我·母：你是我的母亲", context)
 
     def test_matches_compact_long_abbreviation(self):
         matches = self.dictionary.find_matches("良秀：快说否头砸")
