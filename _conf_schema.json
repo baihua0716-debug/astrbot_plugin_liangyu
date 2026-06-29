@@ -1,0 +1,41 @@
+{
+  "enabled": {
+    "description": "是否启用群消息良语自动翻译。",
+    "type": "bool",
+    "hint": "关闭后仍保留插件文件，但不会自动回复群消息。",
+    "default": true
+  },
+  "max_matches_per_message": {
+    "description": "单条消息最多翻译多少个良语。",
+    "type": "int",
+    "hint": "用于避免一条消息触发过长回复。",
+    "default": 5
+  },
+  "min_unseparated_match_len": {
+    "description": "无分隔符缩写至少多少个字才允许在句子中被命中。",
+    "type": "int",
+    "hint": "两字良语仍可在完整消息等于该缩写时命中，降低误触发。",
+    "default": 3
+  },
+  "ignore_command_messages": {
+    "description": "是否忽略以 /、!、！、／ 开头的命令消息。",
+    "type": "bool",
+    "default": true
+  },
+  "reply_title": {
+    "description": "自动翻译回复的标题。",
+    "type": "string",
+    "default": "良语翻译"
+  },
+  "item_format": {
+    "description": "每条翻译的格式，可用 {abbr} 和 {text}。",
+    "type": "string",
+    "default": "{abbr}：{text}"
+  },
+  "stop_event_after_reply": {
+    "description": "回复后是否阻止后续事件处理。",
+    "type": "bool",
+    "hint": "开启可减少翻译后继续触发其他回复的概率。",
+    "default": true
+  }
+}
