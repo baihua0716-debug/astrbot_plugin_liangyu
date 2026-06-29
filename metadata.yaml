@@ -1,6 +1,6 @@
 name: astrbot_plugin_liangyu
 display_name: "良语翻译"
 desc: "翻译群消息中出现的《边狱巴士公司》良秀式良语缩写。"
-version: v0.1.0
+version: v0.2.0
 author: baihua0716-debug
 repo: "https://github.com/baihua0716-debug/astrbot_plugin_liangyu"

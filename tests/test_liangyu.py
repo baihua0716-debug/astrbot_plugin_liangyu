@@ -1,6 +1,12 @@
 import unittest
 
-from liangyu import LiangYuDictionary, format_matches
+from liangyu import (
+    LiangYuDictionary,
+    build_inference_prompt,
+    clean_inferred_text,
+    extract_liangyu_candidates,
+    format_matches,
+)
 
 
 ENTRIES = [
@@ -28,6 +34,21 @@ class LiangYuDictionaryTest(unittest.TestCase):
         matches = self.dictionary.find_matches("他说你我母")
 
         self.assertEqual(matches[0].text, "你是我的母亲")
+
+    def test_extracts_unknown_dotted_candidates(self):
+        self.assertEqual(extract_liangyu_candidates("某群友说“你·我·母”"), ["你·我·母"])
+
+    def test_builds_prompt_with_examples(self):
+        prompt = build_inference_prompt("你·我·母", self.dictionary.entries)
+
+        self.assertIn("你·我·母", prompt)
+        self.assertIn("快·说·否·头·砸", prompt)
+        self.assertIn("只输出还原后的中文句子", prompt)
+
+    def test_cleans_inferred_text(self):
+        text = clean_inferred_text("你·我·母", "译文：你是我的母亲\n解释：略")
+
+        self.assertEqual(text, "你是我的母亲")
 
     def test_matches_compact_long_abbreviation(self):
         matches = self.dictionary.find_matches("良秀：快说否头砸")

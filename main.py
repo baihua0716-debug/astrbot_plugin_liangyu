@@ -5,9 +5,23 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 try:
-    from .liangyu import LiangYuDictionary, format_matches
+    from .liangyu import (
+        LiangYuDictionary,
+        LiangYuMatch,
+        build_inference_prompt,
+        clean_inferred_text,
+        extract_liangyu_candidates,
+        format_matches,
+    )
 except ImportError:
-    from liangyu import LiangYuDictionary, format_matches
+    from liangyu import (
+        LiangYuDictionary,
+        LiangYuMatch,
+        build_inference_prompt,
+        clean_inferred_text,
+        extract_liangyu_candidates,
+        format_matches,
+    )
 
 
 DEFAULT_CONFIG = {
@@ -16,7 +30,13 @@ DEFAULT_CONFIG = {
     "min_unseparated_match_len": 3,
     "ignore_command_messages": True,
     "reply_title": "良语翻译",
+    "inferred_reply_title": "良语推断",
     "item_format": "{abbr}：{text}",
+    "inferred_item_format": "{abbr}：{text}",
+    "enable_llm_fallback": True,
+    "auto_infer_unknown_dotted": True,
+    "max_llm_candidates_per_message": 2,
+    "llm_prompt_examples": 18,
     "stop_event_after_reply": True,
 }
 
@@ -39,7 +59,7 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
         return int(DEFAULT_CONFIG[key])
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.1.0")
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.2.0")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -71,15 +91,44 @@ class LiangYuTranslatorPlugin(Star):
             ),
         )
         if not matches:
-            return
+            if not (
+                config_value(self.config, "enable_llm_fallback")
+                and config_value(self.config, "auto_infer_unknown_dotted")
+            ):
+                return
+            candidates = extract_liangyu_candidates(
+                message,
+                max_candidates=max(
+                    1, int_config_value(self.config, "max_llm_candidates_per_message")
+                ),
+            )
+            if not candidates:
+                return
+            matches = await self._infer_matches(event, candidates)
+            if not matches:
+                return
 
         if config_value(self.config, "stop_event_after_reply"):
             event.stop_event()
         yield event.plain_result(
             format_matches(
                 matches,
-                title=str(config_value(self.config, "reply_title")),
-                item_format=str(config_value(self.config, "item_format")),
+                title=str(
+                    config_value(
+                        self.config,
+                        "inferred_reply_title"
+                        if any(match.inferred for match in matches)
+                        else "reply_title",
+                    )
+                ),
+                item_format=str(
+                    config_value(
+                        self.config,
+                        "inferred_item_format"
+                        if any(match.inferred for match in matches)
+                        else "item_format",
+                    )
+                ),
             )
         )
 
@@ -103,7 +152,71 @@ class LiangYuTranslatorPlugin(Star):
             yield event.plain_result(format_matches(matches, title="可能是这些良语"))
             return
 
-        yield event.plain_result("未找到这个良语缩写。")
+        if not config_value(self.config, "enable_llm_fallback"):
+            yield event.plain_result("未找到这个良语缩写。")
+            return
+
+        inferred = await self._infer_matches(event, [query])
+        if inferred:
+            yield event.plain_result(
+                format_matches(
+                    inferred,
+                    title=str(config_value(self.config, "inferred_reply_title")),
+                    item_format=str(config_value(self.config, "inferred_item_format")),
+                )
+            )
+            return
+
+        yield event.plain_result("未找到这个良语缩写，也暂时无法调用模型推断。")
+
+    async def _infer_matches(
+        self, event: AstrMessageEvent, candidates: list[str]
+    ) -> list[LiangYuMatch]:
+        provider_id = await self._get_chat_provider_id(event)
+        if not provider_id:
+            logger.warning("良语推断失败：当前会话没有可用的 LLM 提供商。")
+            return []
+
+        matches: list[LiangYuMatch] = []
+        for candidate in candidates:
+            prompt = build_inference_prompt(
+                candidate,
+                self.dictionary.entries,
+                max_examples=max(1, int_config_value(self.config, "llm_prompt_examples")),
+            )
+            try:
+                response = await self.context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=prompt,
+                )
+            except Exception as exc:
+                logger.warning("良语推断失败：%s", exc)
+                continue
+
+            text = clean_inferred_text(
+                candidate,
+                getattr(response, "completion_text", ""),
+            )
+            if text:
+                matches.append(LiangYuMatch(abbr=candidate, text=text, inferred=True))
+        return matches
+
+    async def _get_chat_provider_id(self, event: AstrMessageEvent):
+        umo = getattr(event, "unified_msg_origin", None)
+        try:
+            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            if provider_id:
+                return provider_id
+        except Exception as exc:
+            logger.warning("无法获取当前会话 LLM Provider：%s", exc)
+
+        try:
+            providers = self.context.get_all_providers()
+            if providers:
+                return providers[0].meta().id
+        except Exception as exc:
+            logger.warning("无法获取可用 LLM Provider：%s", exc)
+        return None
 
     @staticmethod
     def _extract_command_argument(message: str) -> str:

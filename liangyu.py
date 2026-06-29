@@ -11,6 +11,12 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_PATH = DATA_DIR / "liangyu_phrases.json"
 CUSTOM_DATA_PATH = DATA_DIR / "custom_phrases.json"
 SEPARATOR_RE = re.compile(r"[\s·•･・.。,_，、\-_/\\|]+")
+EXPLICIT_LIANGYU_RE = re.compile(
+    r"[\u3400-\u9fff](?:[·•･・.。,_，、\-_/\\|]+[\u3400-\u9fff]){1,11}"
+)
+LEADING_LABEL_RE = re.compile(
+    r"^(?:推断|译文|翻译|良语翻译|良语推断|答案|还原)\s*[:：]\s*"
+)
 
 
 @dataclass(frozen=True)
@@ -24,11 +30,67 @@ class LiangYuEntry:
 class LiangYuMatch:
     abbr: str
     text: str
+    inferred: bool = False
 
 
 def normalize_key(value: str) -> str:
     """Collapse common separators so users can type 良语 with or without dots."""
     return SEPARATOR_RE.sub("", value or "").strip()
+
+
+def extract_liangyu_candidates(
+    message: str,
+    *,
+    max_candidates: int = 3,
+) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw_candidate in EXPLICIT_LIANGYU_RE.findall(message or ""):
+        candidate = raw_candidate.strip(" ，,。.!！？?;；:：")
+        key = normalize_key(candidate)
+        if not (2 <= len(key) <= 12) or key in seen:
+            continue
+        candidates.append(candidate)
+        seen.add(key)
+        if len(candidates) >= max_candidates:
+            break
+    return candidates
+
+
+def build_inference_prompt(
+    abbr: str,
+    examples: Sequence[LiangYuEntry],
+    *,
+    max_examples: int = 18,
+) -> str:
+    sample_lines = "\n".join(
+        f"- {entry.abbr} => {entry.text}" for entry in examples[:max_examples]
+    )
+    compact = normalize_key(abbr)
+    return (
+        "你是《边狱巴士公司》角色良秀的“良语”缩写翻译器。\n"
+        "良语通常把一句话压缩为若干关键汉字，用“·”分隔；每个字大多代表一个词、短语或句子成分。\n"
+        "你的任务是根据例句规律，把新的良语缩写还原成自然中文。可以合理补足虚词、判断、动词和语气，但不要写解释。\n"
+        "如果存在多种可能，选择最自然、最贴近中文语义的一种。\n\n"
+        "例句：\n"
+        f"{sample_lines}\n\n"
+        f"待翻译良语：{abbr}\n"
+        f"去分隔符形式：{compact}\n\n"
+        "只输出还原后的中文句子，不要输出引号、前缀、解释或候选列表。"
+    )
+
+
+def clean_inferred_text(abbr: str, response: str, *, max_chars: int = 120) -> str:
+    text = (response or "").strip()
+    if not text:
+        return ""
+    text = text.replace("```", "").strip()
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    first_line = LEADING_LABEL_RE.sub("", first_line).strip()
+    for label in (abbr, normalize_key(abbr)):
+        if first_line.startswith(label):
+            first_line = first_line[len(label) :].lstrip("：: -—").strip()
+    return first_line[:max_chars].strip()
 
 
 class LiangYuDictionary:

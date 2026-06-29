@@ -27,10 +27,44 @@
     "type": "string",
     "default": "良语翻译"
   },
+  "inferred_reply_title": {
+    "description": "LLM 推断未知良语时的回复标题。",
+    "type": "string",
+    "default": "良语推断"
+  },
   "item_format": {
     "description": "每条翻译的格式，可用 {abbr} 和 {text}。",
     "type": "string",
     "default": "{abbr}：{text}"
+  },
+  "inferred_item_format": {
+    "description": "LLM 推断结果的格式，可用 {abbr} 和 {text}。",
+    "type": "string",
+    "default": "{abbr}：{text}"
+  },
+  "enable_llm_fallback": {
+    "description": "词库未命中时是否调用 AstrBot 当前 LLM 推断。",
+    "type": "bool",
+    "hint": "开启后插件不再局限于已有词库，但结果会受模型能力影响。",
+    "default": true
+  },
+  "auto_infer_unknown_dotted": {
+    "description": "群消息中出现未知的带分隔符良语时是否自动推断。",
+    "type": "bool",
+    "hint": "关闭后仍可使用 /良语 缩写 手动推断。",
+    "default": true
+  },
+  "max_llm_candidates_per_message": {
+    "description": "单条群消息最多自动推断多少个未知良语。",
+    "type": "int",
+    "hint": "用于控制模型调用次数和群内刷屏。",
+    "default": 2
+  },
+  "llm_prompt_examples": {
+    "description": "构造推断提示词时最多引用多少条已知良语例句。",
+    "type": "int",
+    "hint": "例句越多越贴近风格，但提示词越长。",
+    "default": 18
   },
   "stop_event_after_reply": {
     "description": "回复后是否阻止后续事件处理。",
