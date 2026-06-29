@@ -24,7 +24,7 @@ AstrBot 插件，用于翻译群消息中出现的《边狱巴士公司》良秀
 
 ## 词库
 
-当前词库位于 `data/liangyu_phrases.json`，来自项目目录中的 `良·语举例.xlsx`。
+当前词库位于 `data/liangyu_phrases.json`，来自项目目录中的 `良·语举例.xlsx`。插件启动时也会读取可选的 `data/custom_phrases.json`，可用于放置你自己的测试项或群内自造良语。
 
 新增词条示例：
 

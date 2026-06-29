@@ -4,6 +4,7 @@ from liangyu import LiangYuDictionary, format_matches
 
 
 ENTRIES = [
+    {"abbr": "你·我·母", "text": "你是我的母亲"},
     {"abbr": "全·切", "text": "全部切碎"},
     {"abbr": "快·说·否·头·砸", "text": "快点说，否则……就把你的头砸碎"},
 ]
@@ -17,6 +18,16 @@ class LiangYuDictionaryTest(unittest.TestCase):
         matches = self.dictionary.find_matches("请翻译 快·说·否·头·砸")
 
         self.assertEqual(matches[0].abbr, "快·说·否·头·砸")
+
+    def test_matches_custom_phrase(self):
+        matches = self.dictionary.find_matches("你·我·母")
+
+        self.assertEqual(matches[0].text, "你是我的母亲")
+
+    def test_matches_compact_custom_phrase(self):
+        matches = self.dictionary.find_matches("他说你我母")
+
+        self.assertEqual(matches[0].text, "你是我的母亲")
 
     def test_matches_compact_long_abbreviation(self):
         matches = self.dictionary.find_matches("良秀：快说否头砸")

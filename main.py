@@ -44,7 +44,7 @@ class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config
-        self.dictionary = LiangYuDictionary.from_json()
+        self.dictionary = LiangYuDictionary.from_default_files()
 
     async def initialize(self):
         logger.info("良语翻译插件已加载 %s 条词条。", len(self.dictionary.entries))

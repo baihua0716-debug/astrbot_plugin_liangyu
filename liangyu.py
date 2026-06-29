@@ -7,7 +7,9 @@ import re
 from typing import Iterable, Sequence
 
 
-DATA_PATH = Path(__file__).resolve().parent / "data" / "liangyu_phrases.json"
+DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_PATH = DATA_DIR / "liangyu_phrases.json"
+CUSTOM_DATA_PATH = DATA_DIR / "custom_phrases.json"
 SEPARATOR_RE = re.compile(r"[\s·•･・.。,_，、\-_/\\|]+")
 
 
@@ -47,6 +49,12 @@ class LiangYuDictionary:
     def from_json(cls, path: str | Path = DATA_PATH) -> "LiangYuDictionary":
         with Path(path).open("r", encoding="utf-8") as fp:
             return cls(json.load(fp))
+
+    @classmethod
+    def from_default_files(cls) -> "LiangYuDictionary":
+        entries = _load_json_entries(DATA_PATH)
+        entries.extend(_load_json_entries(CUSTOM_DATA_PATH))
+        return cls(entries)
 
     def lookup(self, query: str) -> LiangYuEntry | None:
         query = (query or "").strip()
@@ -99,3 +107,14 @@ def format_matches(
         except (KeyError, IndexError, ValueError):
             lines.append(f"{match.abbr}：{match.text}")
     return "\n".join(lines)
+
+
+def _load_json_entries(path: str | Path) -> list[dict[str, str]]:
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as fp:
+        data = json.load(fp)
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
