@@ -11,8 +11,9 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 DATA_PATH = DATA_DIR / "liangyu_phrases.json"
 CUSTOM_DATA_PATH = DATA_DIR / "custom_phrases.json"
 SEPARATOR_RE = re.compile(r"[\s·•･・.。,_，、\-_/\\|]+")
+LIANGYU_SEPARATOR_RE = re.compile(r"[·•･・]")
 EXPLICIT_LIANGYU_RE = re.compile(
-    r"[\u3400-\u9fff](?:[·•･・.。,_，、\-_/\\|]+[\u3400-\u9fff]){1,11}"
+    r"[\u3400-\u9fff](?:[·•･・][\u3400-\u9fff]){1,11}"
 )
 LEADING_LABEL_RE = re.compile(
     r"^(?:推断|译文|翻译|翻译说明|解释|说明|释义|含义|意思|良语翻译|良语推断|答案|还原|结果)\s*[:：]\s*"
@@ -45,6 +46,10 @@ class LiangYuMatch:
 def normalize_key(value: str) -> str:
     """Collapse common separators so users can type 良语 with or without dots."""
     return SEPARATOR_RE.sub("", value or "").strip()
+
+
+def has_liangyu_separator(value: str) -> bool:
+    return bool(LIANGYU_SEPARATOR_RE.search(value or ""))
 
 
 def extract_liangyu_candidates(
@@ -244,7 +249,6 @@ class LiangYuDictionary:
         min_unseparated_match_len: int = 3,
     ) -> list[LiangYuMatch]:
         message = message or ""
-        compact_message = normalize_key(message)
         matches: list[LiangYuMatch] = []
         seen: set[str] = set()
 
@@ -252,14 +256,7 @@ class LiangYuDictionary:
             if entry.key in seen:
                 continue
 
-            raw_hit = entry.abbr in message
-            compact_exact = compact_message == entry.key
-            compact_hit = (
-                len(entry.key) >= min_unseparated_match_len
-                and entry.key in compact_message
-            )
-
-            if raw_hit or compact_exact or compact_hit:
+            if _entry_matches_explicit_liangyu(entry, message):
                 matches.append(LiangYuMatch(abbr=entry.abbr, text=entry.text))
                 seen.add(entry.key)
                 if len(matches) >= max_matches:
@@ -292,3 +289,16 @@ def _load_json_entries(path: str | Path) -> list[dict[str, str]]:
     if not isinstance(data, list):
         return []
     return [item for item in data if isinstance(item, dict)]
+
+
+def _entry_matches_explicit_liangyu(entry: LiangYuEntry, message: str) -> bool:
+    if entry.abbr in message:
+        return True
+    if not has_liangyu_separator(message):
+        return False
+
+    parts = [part for part in LIANGYU_SEPARATOR_RE.split(entry.abbr) if part]
+    if len(parts) <= 1:
+        return False
+    pattern = r"[·•･・]".join(re.escape(part) for part in parts)
+    return re.search(pattern, message) is not None

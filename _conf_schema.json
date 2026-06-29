@@ -11,12 +11,6 @@
     "hint": "用于避免一条消息触发过长回复。",
     "default": 5
   },
-  "min_unseparated_match_len": {
-    "description": "无分隔符缩写至少多少个字才允许在句子中被命中。",
-    "type": "int",
-    "hint": "两字良语仍可在完整消息等于该缩写时命中，降低误触发。",
-    "default": 3
-  },
   "ignore_command_messages": {
     "description": "是否忽略以 /、!、！、／ 开头的命令消息。",
     "type": "bool",

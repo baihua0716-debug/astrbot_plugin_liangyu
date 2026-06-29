@@ -34,13 +34,22 @@ class LiangYuDictionaryTest(unittest.TestCase):
 
         self.assertEqual(matches[0].text, "你是我的母亲")
 
-    def test_matches_compact_custom_phrase(self):
+    def test_does_not_match_compact_custom_phrase_in_message(self):
         matches = self.dictionary.find_matches("他说你我母")
+
+        self.assertEqual(matches, [])
+
+    def test_matches_alternate_liangyu_separator(self):
+        matches = self.dictionary.find_matches("他说你•我•母")
 
         self.assertEqual(matches[0].text, "你是我的母亲")
 
     def test_extracts_unknown_dotted_candidates(self):
         self.assertEqual(extract_liangyu_candidates("某群友说“你·我·母”"), ["你·我·母"])
+
+    def test_does_not_extract_comma_punctuation_as_liangyu(self):
+        self.assertEqual(extract_liangyu_candidates("好了，洗掉了翻译说明"), [])
+        self.assertEqual(self.dictionary.find_matches("好了，洗掉了翻译说明"), [])
 
     def test_detects_explicit_translation_request(self):
         self.assertTrue(is_explicit_translation_request("帮我翻译 你·我·母"))
@@ -95,16 +104,16 @@ class LiangYuDictionaryTest(unittest.TestCase):
         self.assertNotIn("翻译说明", context)
         self.assertIn("你·我·母：你是我的母亲", context)
 
-    def test_matches_compact_long_abbreviation(self):
+    def test_does_not_match_compact_long_abbreviation_in_message(self):
         matches = self.dictionary.find_matches("良秀：快说否头砸")
 
-        self.assertEqual(matches[0].text, "快点说，否则……就把你的头砸碎")
+        self.assertEqual(matches, [])
 
     def test_short_compact_only_matches_exact_message(self):
         self.assertEqual(self.dictionary.find_matches("我要全切了"), [])
 
         matches = self.dictionary.find_matches("全切")
-        self.assertEqual(matches[0].abbr, "全·切")
+        self.assertEqual(matches, [])
 
     def test_lookup_ignores_separators(self):
         entry = self.dictionary.lookup("快说否头砸")
@@ -113,7 +122,7 @@ class LiangYuDictionaryTest(unittest.TestCase):
         self.assertEqual(entry.abbr, "快·说·否·头·砸")
 
     def test_format_falls_back_on_bad_template(self):
-        matches = self.dictionary.find_matches("快说否头砸")
+        matches = self.dictionary.find_matches("快·说·否·头·砸")
 
         self.assertIn("快·说·否·头·砸", format_matches(matches, item_format="{missing}"))
 

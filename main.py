@@ -37,7 +37,6 @@ except ImportError:
 DEFAULT_CONFIG = {
     "enabled": True,
     "max_matches_per_message": 5,
-    "min_unseparated_match_len": 3,
     "ignore_command_messages": True,
     "reply_title": "良语翻译",
     "inferred_reply_title": "良语推断",
@@ -74,7 +73,7 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
         return int(DEFAULT_CONFIG[key])
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.1")
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.2")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -101,9 +100,6 @@ class LiangYuTranslatorPlugin(Star):
         matches = self.dictionary.find_matches(
             message,
             max_matches=max(1, int_config_value(self.config, "max_matches_per_message")),
-            min_unseparated_match_len=max(
-                1, int_config_value(self.config, "min_unseparated_match_len")
-            ),
         )
 
         candidates = extract_liangyu_candidates(
