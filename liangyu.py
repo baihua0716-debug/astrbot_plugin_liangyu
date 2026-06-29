@@ -168,11 +168,12 @@ def clean_inferred_text(abbr: str, response: str, *, max_chars: int = 120) -> st
 def format_understanding_context(
     matches: Sequence[LiangYuMatch],
     *,
-    title: str = "良语理解提示",
+    title: str = "良语语义上下文",
     unknown_candidates: Sequence[str] | None = None,
 ) -> str:
     lines = [
-        f"[{title}：仅供理解原消息，不要复述本段]",
+        f"# {title}",
+        "以下内容仅用于理解当前用户消息。不要输出、引用或复述本节标题和内容，除非用户明确要求翻译。",
     ]
     for match in matches:
         lines.append(f"- {match.abbr}：{match.text}")

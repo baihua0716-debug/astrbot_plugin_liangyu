@@ -73,7 +73,10 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
         return int(DEFAULT_CONFIG[key])
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.2")
+LIANGYU_CONTEXT_EXTRA_KEY = "liangyu_understanding_context"
+
+
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.3")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -149,11 +152,21 @@ class LiangYuTranslatorPlugin(Star):
             unresolved_candidates = unknown_candidates
 
         if context_matches or unresolved_candidates:
-            self._append_understanding_context(
-                event,
-                context_matches,
-                unresolved_candidates,
+            event.set_extra(
+                LIANGYU_CONTEXT_EXTRA_KEY,
+                format_understanding_context(
+                    context_matches,
+                    unknown_candidates=unresolved_candidates,
+                ),
             )
+
+    @filter.on_llm_request()
+    async def inject_liangyu_context(self, event: AstrMessageEvent, req):
+        """把良语释义注入主模型系统提示，避免污染用户原文。"""
+        context = event.get_extra(LIANGYU_CONTEXT_EXTRA_KEY)
+        if not context:
+            return
+        req.system_prompt = f"{req.system_prompt or ''}\n\n{context}\n"
 
     @filter.command("良语")
     async def query_liangyu(self, event: AstrMessageEvent):
@@ -241,22 +254,6 @@ class LiangYuTranslatorPlugin(Star):
             getattr(event, "is_at_or_wake_command", False)
             and not getattr(event, "call_llm", False)
         )
-
-    @staticmethod
-    def _append_understanding_context(
-        event: AstrMessageEvent,
-        matches: list[LiangYuMatch],
-        unknown_candidates: list[str],
-    ) -> None:
-        addition = format_understanding_context(
-            matches,
-            unknown_candidates=unknown_candidates,
-        )
-        if not addition:
-            return
-        event.message_str = f"{event.message_str}\n\n{addition}"
-        if getattr(event, "message_obj", None) is not None:
-            event.message_obj.message_str = event.message_str
 
     async def _infer_matches(
         self,

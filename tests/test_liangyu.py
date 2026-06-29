@@ -100,7 +100,8 @@ class LiangYuDictionaryTest(unittest.TestCase):
         matches = self.dictionary.find_matches("你·我·母")
         context = format_understanding_context(matches)
 
-        self.assertIn("仅供理解原消息", context)
+        self.assertIn("仅用于理解当前用户消息", context)
+        self.assertNotIn("[良语理解提示", context)
         self.assertNotIn("翻译说明", context)
         self.assertIn("你·我·母：你是我的母亲", context)
 
