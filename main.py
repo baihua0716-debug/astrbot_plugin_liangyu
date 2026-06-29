@@ -8,7 +8,9 @@ try:
     from .liangyu import (
         LiangYuDictionary,
         LiangYuMatch,
-        build_inference_prompt,
+        build_inference_system_prompt,
+        build_inference_user_prompt,
+        build_knowledge_query,
         clean_inferred_text,
         extract_liangyu_candidates,
         format_matches,
@@ -17,7 +19,9 @@ except ImportError:
     from liangyu import (
         LiangYuDictionary,
         LiangYuMatch,
-        build_inference_prompt,
+        build_inference_system_prompt,
+        build_inference_user_prompt,
+        build_knowledge_query,
         clean_inferred_text,
         extract_liangyu_candidates,
         format_matches,
@@ -35,8 +39,11 @@ DEFAULT_CONFIG = {
     "inferred_item_format": "{abbr}：{text}",
     "enable_llm_fallback": True,
     "auto_infer_unknown_dotted": True,
+    "use_persona_context": True,
+    "use_knowledge_base": True,
     "max_llm_candidates_per_message": 2,
     "llm_prompt_examples": 18,
+    "knowledge_context_max_chars": 2400,
     "stop_event_after_reply": True,
 }
 
@@ -59,7 +66,7 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
         return int(DEFAULT_CONFIG[key])
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.2.0")
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.3.0")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
@@ -104,7 +111,7 @@ class LiangYuTranslatorPlugin(Star):
             )
             if not candidates:
                 return
-            matches = await self._infer_matches(event, candidates)
+            matches = await self._infer_matches(event, candidates, message)
             if not matches:
                 return
 
@@ -156,7 +163,7 @@ class LiangYuTranslatorPlugin(Star):
             yield event.plain_result("未找到这个良语缩写。")
             return
 
-        inferred = await self._infer_matches(event, [query])
+        inferred = await self._infer_matches(event, [query], query)
         if inferred:
             yield event.plain_result(
                 format_matches(
@@ -170,7 +177,10 @@ class LiangYuTranslatorPlugin(Star):
         yield event.plain_result("未找到这个良语缩写，也暂时无法调用模型推断。")
 
     async def _infer_matches(
-        self, event: AstrMessageEvent, candidates: list[str]
+        self,
+        event: AstrMessageEvent,
+        candidates: list[str],
+        source_message: str = "",
     ) -> list[LiangYuMatch]:
         provider_id = await self._get_chat_provider_id(event)
         if not provider_id:
@@ -178,8 +188,24 @@ class LiangYuTranslatorPlugin(Star):
             return []
 
         matches: list[LiangYuMatch] = []
+        persona_prompt = ""
+        if config_value(self.config, "use_persona_context"):
+            persona_prompt = await self._get_persona_prompt(event)
+
         for candidate in candidates:
-            prompt = build_inference_prompt(
+            knowledge_context = ""
+            if config_value(self.config, "use_knowledge_base"):
+                knowledge_context = await self._retrieve_knowledge_context(
+                    event,
+                    candidate,
+                    source_message,
+                )
+
+            system_prompt = build_inference_system_prompt(
+                persona_prompt=persona_prompt,
+                knowledge_context=knowledge_context,
+            )
+            prompt = build_inference_user_prompt(
                 candidate,
                 self.dictionary.entries,
                 max_examples=max(1, int_config_value(self.config, "llm_prompt_examples")),
@@ -188,6 +214,7 @@ class LiangYuTranslatorPlugin(Star):
                 response = await self.context.llm_generate(
                     chat_provider_id=provider_id,
                     prompt=prompt,
+                    system_prompt=system_prompt,
                 )
             except Exception as exc:
                 logger.warning("良语推断失败：%s", exc)
@@ -200,6 +227,83 @@ class LiangYuTranslatorPlugin(Star):
             if text:
                 matches.append(LiangYuMatch(abbr=candidate, text=text, inferred=True))
         return matches
+
+    async def _get_persona_prompt(self, event: AstrMessageEvent) -> str:
+        umo = getattr(event, "unified_msg_origin", None)
+        if not umo:
+            return ""
+
+        conversation_persona_id = None
+        try:
+            conversation_manager = getattr(self.context, "conversation_manager", None)
+            if conversation_manager:
+                conversation_id = await conversation_manager.get_curr_conversation_id(umo)
+                if conversation_id:
+                    conversation = await conversation_manager.get_conversation(
+                        umo, conversation_id
+                    )
+                    conversation_persona_id = getattr(
+                        conversation, "persona_id", None
+                    )
+        except Exception as exc:
+            logger.warning("无法读取当前会话人格 ID：%s", exc)
+
+        provider_settings = {}
+        try:
+            cfg = self.context.get_config(umo=umo)
+            provider_settings = cfg.get("provider_settings", {})
+        except Exception as exc:
+            logger.warning("无法读取当前会话 provider 设置：%s", exc)
+
+        try:
+            _, persona, _, _ = await self.context.persona_manager.resolve_selected_persona(
+                umo=umo,
+                conversation_persona_id=conversation_persona_id,
+                platform_name=event.get_platform_name(),
+                provider_settings=provider_settings,
+            )
+        except Exception as exc:
+            logger.warning("无法解析当前人格：%s", exc)
+            return ""
+
+        if not persona:
+            return ""
+        try:
+            return str(persona.get("prompt", "")).strip()
+        except AttributeError:
+            return ""
+
+    async def _retrieve_knowledge_context(
+        self,
+        event: AstrMessageEvent,
+        candidate: str,
+        source_message: str,
+    ) -> str:
+        umo = getattr(event, "unified_msg_origin", None)
+        if not umo:
+            return ""
+
+        try:
+            from astrbot.core.tools.knowledge_base_tools import retrieve_knowledge_base
+        except Exception as exc:
+            logger.warning("无法加载 AstrBot 知识库检索工具：%s", exc)
+            return ""
+
+        query = build_knowledge_query(candidate, source_message)
+        try:
+            result = await retrieve_knowledge_base(
+                query=query,
+                umo=umo,
+                context=self.context,
+            )
+        except Exception as exc:
+            logger.warning("良语推断知识库检索失败：%s", exc)
+            return ""
+
+        if not result:
+            return ""
+        max_chars = max(200, int_config_value(self.config, "knowledge_context_max_chars"))
+        return str(result).strip()[:max_chars]
 
     async def _get_chat_provider_id(self, event: AstrMessageEvent):
         umo = getattr(event, "unified_msg_origin", None)

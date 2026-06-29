@@ -54,6 +54,18 @@
     "hint": "关闭后仍可使用 /良语 缩写 手动推断。",
     "default": true
   },
+  "use_persona_context": {
+    "description": "LLM 推断时是否读取当前会话生效的人格设定。",
+    "type": "bool",
+    "hint": "开启后会把人格 prompt 作为翻译背景，但不会要求模型复述人格内容。",
+    "default": true
+  },
+  "use_knowledge_base": {
+    "description": "LLM 推断时是否尝试检索 AstrBot 知识库/数据库。",
+    "type": "bool",
+    "hint": "需要 AstrBot 当前会话或全局已启用对应知识库。",
+    "default": true
+  },
   "max_llm_candidates_per_message": {
     "description": "单条群消息最多自动推断多少个未知良语。",
     "type": "int",
@@ -65,6 +77,12 @@
     "type": "int",
     "hint": "例句越多越贴近风格，但提示词越长。",
     "default": 18
+  },
+  "knowledge_context_max_chars": {
+    "description": "注入 LLM 的知识库检索结果最大字符数。",
+    "type": "int",
+    "hint": "过大可能增加模型消耗，过小可能漏掉剧情上下文。",
+    "default": 2400
   },
   "stop_event_after_reply": {
     "description": "回复后是否阻止后续事件处理。",
