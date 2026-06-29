@@ -79,11 +79,20 @@ class LiangYuDictionaryTest(unittest.TestCase):
 
         self.assertEqual(text, "你是我的母亲")
 
+    def test_cleans_explanatory_inferred_text(self):
+        text = clean_inferred_text(
+            "你·我·母",
+            "翻译说明：\n“你·我·母”可以理解为“你是我的母亲”。",
+        )
+
+        self.assertEqual(text, "你是我的母亲")
+
     def test_formats_silent_understanding_context(self):
         matches = self.dictionary.find_matches("你·我·母")
         context = format_understanding_context(matches)
 
-        self.assertIn("不要专门输出翻译说明", context)
+        self.assertIn("仅供理解原消息", context)
+        self.assertNotIn("翻译说明", context)
         self.assertIn("你·我·母：你是我的母亲", context)
 
     def test_matches_compact_long_abbreviation(self):

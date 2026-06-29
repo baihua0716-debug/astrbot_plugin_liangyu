@@ -74,7 +74,7 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
         return int(DEFAULT_CONFIG[key])
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.0")
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.1")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)

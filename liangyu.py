@@ -15,7 +15,10 @@ EXPLICIT_LIANGYU_RE = re.compile(
     r"[\u3400-\u9fff](?:[·•･・.。,_，、\-_/\\|]+[\u3400-\u9fff]){1,11}"
 )
 LEADING_LABEL_RE = re.compile(
-    r"^(?:推断|译文|翻译|良语翻译|良语推断|答案|还原)\s*[:：]\s*"
+    r"^(?:推断|译文|翻译|翻译说明|解释|说明|释义|含义|意思|良语翻译|良语推断|答案|还原|结果)\s*[:：]\s*"
+)
+EXPLANATION_PREFIX_RE = re.compile(
+    r"^(?:这句(?:话)?(?:良语)?(?:的)?(?:意思|含义)(?:是|为)?|意思是|含义是|可以理解为|可理解为|应理解为|可译为|翻译为|还原为)\s*[:：，,]?\s*"
 )
 TRANSLATION_REQUEST_RE = re.compile(
     r"(翻译|译一下|解释|说明|什么意思|是什么意思|啥意思|什么含义|含义|还原|展开|转成中文|完整意思)"
@@ -150,12 +153,11 @@ def clean_inferred_text(abbr: str, response: str, *, max_chars: int = 120) -> st
     if not text:
         return ""
     text = text.replace("```", "").strip()
-    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    first_line = LEADING_LABEL_RE.sub("", first_line).strip()
-    for label in (abbr, normalize_key(abbr)):
-        if first_line.startswith(label):
-            first_line = first_line[len(label) :].lstrip("：: -—").strip()
-    return first_line[:max_chars].strip()
+    for line in text.splitlines():
+        cleaned = _clean_inferred_line(abbr, line)
+        if cleaned:
+            return cleaned[:max_chars].strip()
+    return ""
 
 
 def format_understanding_context(
@@ -165,14 +167,42 @@ def format_understanding_context(
     unknown_candidates: Sequence[str] | None = None,
 ) -> str:
     lines = [
-        f"[{title}]",
-        "以下是插件为模型理解原消息自动添加的上下文。除非用户明确要求翻译，否则不要专门输出翻译说明。",
+        f"[{title}：仅供理解原消息，不要复述本段]",
     ]
     for match in matches:
         lines.append(f"- {match.abbr}：{match.text}")
     for candidate in unknown_candidates or []:
         lines.append(f"- {candidate}：可能是良语缩写，请结合人格设定和知识库理解。")
     return "\n".join(lines)
+
+
+def _clean_inferred_line(abbr: str, line: str) -> str:
+    cleaned = line.strip().strip("「」『』“”\"'")
+    if not cleaned:
+        return ""
+
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = LEADING_LABEL_RE.sub("", cleaned).strip()
+        cleaned = _strip_candidate_prefix(abbr, cleaned)
+        cleaned = EXPLANATION_PREFIX_RE.sub("", cleaned).strip()
+        cleaned = cleaned.strip("「」『』“”\"' ")
+
+    if not cleaned or LEADING_LABEL_RE.fullmatch(cleaned):
+        return ""
+    return cleaned.rstrip("。").strip("「」『』“”\"' ")
+
+
+def _strip_candidate_prefix(abbr: str, text: str) -> str:
+    for label in (abbr, normalize_key(abbr)):
+        pattern = re.compile(
+            rf"^[「『“\"']?{re.escape(label)}[」』”\"']?\s*(?:[:：\-—，,]|可以理解为|可理解为|意思是|含义是|即是|是)?\s*"
+        )
+        stripped = pattern.sub("", text, count=1).strip()
+        if stripped != text:
+            return EXPLANATION_PREFIX_RE.sub("", stripped).strip()
+    return text
 
 
 class LiangYuDictionary:
