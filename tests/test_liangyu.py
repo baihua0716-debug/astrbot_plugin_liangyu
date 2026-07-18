@@ -7,6 +7,7 @@ from liangyu import (
     clean_inferred_text,
     build_knowledge_query,
     extract_liangyu_candidates,
+    extract_response_text,
     format_matches,
     format_understanding_context,
     is_explicit_translation_request,
@@ -95,6 +96,29 @@ class LiangYuDictionaryTest(unittest.TestCase):
         )
 
         self.assertEqual(text, "你是我的母亲")
+
+    def test_extracts_text_from_result_chain_response(self):
+        class FakeChain:
+            def get_plain_text(self):
+                return " 你是我的母亲 "
+
+        class FakeResponse:
+            result_chain = FakeChain()
+            completion_text = ""
+
+        self.assertEqual(extract_response_text(FakeResponse()), "你是我的母亲")
+
+    def test_extracts_text_from_completion_text_response(self):
+        class FakeResponse:
+            result_chain = None
+            completion_text = " 你是我的母亲 "
+
+        self.assertEqual(extract_response_text(FakeResponse()), "你是我的母亲")
+
+    def test_extracts_text_from_dict_choices_response(self):
+        response = {"choices": [{"message": {"content": " 你是我的母亲 "}}]}
+
+        self.assertEqual(extract_response_text(response), "你是我的母亲")
 
     def test_formats_silent_understanding_context(self):
         matches = self.dictionary.find_matches("你·我·母")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -13,6 +15,7 @@ try:
         build_knowledge_query,
         clean_inferred_text,
         extract_liangyu_candidates,
+        extract_response_text,
         format_matches,
         format_understanding_context,
         is_explicit_translation_request,
@@ -27,6 +30,7 @@ except ImportError:
         build_knowledge_query,
         clean_inferred_text,
         extract_liangyu_candidates,
+        extract_response_text,
         format_matches,
         format_understanding_context,
         is_explicit_translation_request,
@@ -76,12 +80,13 @@ def int_config_value(config: AstrBotConfig | None, key: str) -> int:
 LIANGYU_CONTEXT_EXTRA_KEY = "liangyu_understanding_context"
 
 
-@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.3")
+@register("astrbot_plugin_liangyu", "Codex", "翻译群消息中的良语缩写", "v0.4.4")
 class LiangYuTranslatorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config
         self.dictionary = LiangYuDictionary.from_default_files()
+        self._last_infer_error = ""
 
     async def initialize(self):
         logger.info("良语翻译插件已加载 %s 条词条。", len(self.dictionary.entries))
@@ -203,6 +208,12 @@ class LiangYuTranslatorPlugin(Star):
             )
             return
 
+        if self._last_infer_error:
+            yield event.plain_result(
+                f"未找到这个良语缩写，也暂时无法调用模型推断：{self._last_infer_error}"
+            )
+            return
+
         yield event.plain_result("未找到这个良语缩写，也暂时无法调用模型推断。")
 
     def _format_reply(self, matches: list[LiangYuMatch]) -> str:
@@ -261,8 +272,10 @@ class LiangYuTranslatorPlugin(Star):
         candidates: list[str],
         source_message: str = "",
     ) -> list[LiangYuMatch]:
-        provider_id = await self._get_chat_provider_id(event)
-        if not provider_id:
+        self._last_infer_error = ""
+        provider_id, provider = await self._get_chat_provider(event)
+        if not provider_id and provider is None:
+            self._last_infer_error = "没有取到当前聊天模型 Provider。"
             logger.warning("良语推断失败：当前会话没有可用的 LLM 提供商。")
             return []
 
@@ -290,21 +303,29 @@ class LiangYuTranslatorPlugin(Star):
                 max_examples=max(1, int_config_value(self.config, "llm_prompt_examples")),
             )
             try:
-                response = await self.context.llm_generate(
-                    chat_provider_id=provider_id,
+                response = await self._call_llm(
+                    provider_id=provider_id,
+                    provider=provider,
                     prompt=prompt,
                     system_prompt=system_prompt,
                 )
             except Exception as exc:
-                logger.warning("良语推断失败：%s", exc)
+                self._last_infer_error = self._short_error(exc)
+                logger.warning("良语推断失败：%s", self._last_infer_error)
                 continue
 
-            text = clean_inferred_text(
-                candidate,
-                getattr(response, "completion_text", ""),
-            )
+            raw_text = extract_response_text(response)
+            if not raw_text:
+                self._last_infer_error = "模型返回中没有可读取的文本。"
+                logger.warning("良语推断失败：%s", self._last_infer_error)
+                continue
+
+            text = clean_inferred_text(candidate, raw_text)
             if text:
+                self._last_infer_error = ""
                 matches.append(LiangYuMatch(abbr=candidate, text=text, inferred=True))
+            else:
+                self._last_infer_error = "模型返回被清理后为空。"
         return matches
 
     async def _get_persona_prompt(self, event: AstrMessageEvent) -> str:
@@ -384,22 +405,203 @@ class LiangYuTranslatorPlugin(Star):
         max_chars = max(200, int_config_value(self.config, "knowledge_context_max_chars"))
         return str(result).strip()[:max_chars]
 
-    async def _get_chat_provider_id(self, event: AstrMessageEvent):
+    async def _get_chat_provider(
+        self, event: AstrMessageEvent
+    ) -> tuple[str | None, object | None]:
         umo = getattr(event, "unified_msg_origin", None)
-        try:
-            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+        provider_id = await self._get_current_chat_provider_id(umo)
+        provider = None
+
+        if provider_id:
+            provider = await self._get_provider_by_id(provider_id)
+
+        if provider is None:
+            provider = await self._get_using_chat_provider(umo)
+            if provider is not None and not provider_id:
+                provider_id = self._provider_id_from_provider(provider)
+
+        if provider is None:
+            providers = await self._get_all_chat_providers()
+            if providers:
+                provider = providers[0]
+                if not provider_id:
+                    provider_id = self._provider_id_from_provider(provider)
+
+        return provider_id, provider
+
+    async def _get_current_chat_provider_id(self, umo: str | None) -> str | None:
+        method = getattr(self.context, "get_current_chat_provider_id", None)
+        if not callable(method):
+            return None
+
+        attempts: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        if umo:
+            attempts.extend([((umo,), {}), ((), {"umo": umo})])
+        attempts.append(((), {}))
+
+        for args, kwargs in attempts:
+            try:
+                provider_id = await self._maybe_await(method(*args, **kwargs))
+            except Exception:
+                continue
             if provider_id:
-                return provider_id
-        except Exception as exc:
-            logger.warning("无法获取当前会话 LLM Provider：%s", exc)
+                return str(provider_id)
+        return None
+
+    async def _get_using_chat_provider(self, umo: str | None) -> object | None:
+        method = getattr(self.context, "get_using_provider", None)
+        if not callable(method):
+            return None
+
+        attempts: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        if umo:
+            attempts.extend([((umo,), {}), ((), {"umo": umo})])
+        attempts.append(((), {}))
+
+        for args, kwargs in attempts:
+            try:
+                provider = await self._maybe_await(method(*args, **kwargs))
+            except Exception:
+                continue
+            if provider is not None:
+                return provider
+        return None
+
+    async def _get_provider_by_id(self, provider_id: str | None) -> object | None:
+        if not provider_id:
+            return None
+
+        for owner in (self.context, getattr(self.context, "provider_manager", None)):
+            if owner is None:
+                continue
+            method = getattr(owner, "get_provider_by_id", None)
+            if callable(method):
+                try:
+                    provider = await self._maybe_await(method(provider_id))
+                except Exception:
+                    provider = None
+                if provider is not None:
+                    return provider
+
+            inst_map = getattr(owner, "inst_map", None)
+            if isinstance(inst_map, dict):
+                provider = inst_map.get(provider_id)
+                if provider is not None:
+                    return provider
+
+        return None
+
+    async def _get_all_chat_providers(self) -> list[object]:
+        method = getattr(self.context, "get_all_providers", None)
+        if callable(method):
+            try:
+                providers = await self._maybe_await(method())
+            except Exception as exc:
+                logger.warning("无法获取可用 LLM Provider：%s", exc)
+            else:
+                if isinstance(providers, (list, tuple)):
+                    return list(providers)
+
+        manager = getattr(self.context, "provider_manager", None)
+        providers = getattr(manager, "provider_insts", None)
+        if isinstance(providers, (list, tuple)):
+            return list(providers)
+        return []
+
+    async def _call_llm(
+        self,
+        *,
+        provider_id: str | None,
+        provider: object | None,
+        prompt: str,
+        system_prompt: str,
+    ) -> object:
+        errors: list[str] = []
+
+        llm_generate = getattr(self.context, "llm_generate", None)
+        if provider_id and callable(llm_generate):
+            try:
+                return await self._maybe_await(
+                    llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                    )
+                )
+            except Exception as exc:
+                errors.append(self._short_error(exc))
+
+        if provider is None and provider_id:
+            provider = await self._get_provider_by_id(provider_id)
+
+        if provider is not None:
+            text_chat = getattr(provider, "text_chat", None)
+            if callable(text_chat):
+                try:
+                    return await self._maybe_await(
+                        text_chat(prompt=prompt, system_prompt=system_prompt)
+                    )
+                except TypeError as exc:
+                    errors.append(self._short_error(exc))
+                    prompt_with_system = (
+                        f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+                    )
+                    try:
+                        return await self._maybe_await(text_chat(prompt=prompt_with_system))
+                    except Exception as fallback_exc:
+                        errors.append(self._short_error(fallback_exc))
+                except Exception as exc:
+                    errors.append(self._short_error(exc))
+
+        if errors:
+            unique_errors = list(dict.fromkeys(error for error in errors if error))
+            raise RuntimeError("；".join(unique_errors[-2:]))
+        raise RuntimeError("未找到可调用的聊天模型 Provider。")
+
+    @staticmethod
+    def _provider_id_from_provider(provider: object | None) -> str | None:
+        if provider is None:
+            return None
 
         try:
-            providers = self.context.get_all_providers()
-            if providers:
-                return providers[0].meta().id
-        except Exception as exc:
-            logger.warning("无法获取可用 LLM Provider：%s", exc)
+            meta = getattr(provider, "meta", None)
+            meta = meta() if callable(meta) else meta
+        except Exception:
+            meta = None
+
+        for source in (meta, provider):
+            if isinstance(source, dict):
+                for key in ("id", "provider_id"):
+                    value = source.get(key)
+                    if value:
+                        return str(value)
+                continue
+            for attr in ("id", "provider_id"):
+                try:
+                    value = getattr(source, attr, None)
+                except Exception:
+                    continue
+                if value:
+                    return str(value)
+
+        provider_config = getattr(provider, "provider_config", None)
+        if isinstance(provider_config, dict):
+            for key in ("id", "provider_id"):
+                value = provider_config.get(key)
+                if value:
+                    return str(value)
         return None
+
+    @staticmethod
+    async def _maybe_await(value):
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    @staticmethod
+    def _short_error(error: object) -> str:
+        text = str(error).strip() or error.__class__.__name__
+        return " ".join(text.split())[:180]
 
     @staticmethod
     def _extract_command_argument(message: str) -> str:

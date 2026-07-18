@@ -165,6 +165,143 @@ def clean_inferred_text(abbr: str, response: str, *, max_chars: int = 120) -> st
     return ""
 
 
+def extract_response_text(response: object) -> str:
+    """Read plain text from AstrBot/newer provider response shapes."""
+    if response is None:
+        return ""
+    if isinstance(response, str):
+        return response.strip()
+    if isinstance(response, dict):
+        return _extract_mapping_text(response)
+
+    chain_text = _extract_result_chain_text(response)
+    if chain_text:
+        return chain_text
+
+    for attr in (
+        "completion_text",
+        "output_text",
+        "text",
+        "content",
+        "message",
+        "response",
+    ):
+        try:
+            value = getattr(response, attr, None)
+        except Exception:
+            continue
+        text = _coerce_response_text(value)
+        if text:
+            return text
+
+    return _extract_choices_text(response)
+
+
+def _extract_mapping_text(data: dict) -> str:
+    for key in ("completion_text", "output_text", "text", "content", "response"):
+        text = _coerce_response_text(data.get(key))
+        if text:
+            return text
+
+    message = data.get("message")
+    if isinstance(message, dict):
+        text = _extract_mapping_text(message)
+        if text:
+            return text
+    else:
+        text = _coerce_response_text(message)
+        if text:
+            return text
+
+    choices = data.get("choices")
+    if isinstance(choices, list):
+        for choice in choices:
+            if isinstance(choice, dict):
+                text = _extract_mapping_text(choice)
+                if text:
+                    return text
+    return ""
+
+
+def _extract_result_chain_text(response: object) -> str:
+    try:
+        chain = getattr(response, "result_chain", None)
+    except Exception:
+        return ""
+    if chain is None:
+        return ""
+
+    try:
+        get_plain_text = getattr(chain, "get_plain_text", None)
+    except Exception:
+        get_plain_text = None
+    if callable(get_plain_text):
+        text = _coerce_response_text(get_plain_text)
+        if text:
+            return text
+
+    try:
+        components = getattr(chain, "chain", None)
+    except Exception:
+        return ""
+    if not isinstance(components, list):
+        return ""
+
+    parts: list[str] = []
+    for component in components:
+        for attr in ("text", "content"):
+            try:
+                value = getattr(component, attr, None)
+            except Exception:
+                continue
+            if isinstance(value, str) and value:
+                parts.append(value)
+                break
+    return "".join(parts).strip()
+
+
+def _extract_choices_text(response: object) -> str:
+    try:
+        choices = getattr(response, "choices", None)
+    except Exception:
+        return ""
+    if not isinstance(choices, list):
+        return ""
+    for choice in choices:
+        text = _coerce_response_text(choice)
+        if text:
+            return text
+        for attr in ("text", "content"):
+            try:
+                value = getattr(choice, attr, None)
+            except Exception:
+                continue
+            text = _coerce_response_text(value)
+            if text:
+                return text
+        try:
+            message = getattr(choice, "message", None)
+        except Exception:
+            message = None
+        text = _coerce_response_text(message)
+        if text:
+            return text
+    return ""
+
+
+def _coerce_response_text(value: object) -> str:
+    if callable(value):
+        try:
+            value = value()
+        except Exception:
+            return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return _extract_mapping_text(value)
+    return ""
+
+
 def format_understanding_context(
     matches: Sequence[LiangYuMatch],
     *,
